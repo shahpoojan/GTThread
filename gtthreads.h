@@ -17,7 +17,7 @@ struct tcblk{
 	//char c_stack[16384];
 	ucontext_t ctxt;
 	int isMain;
-	int retval;
+	void* retval;
 };
 
 

@@ -10,6 +10,7 @@
 #include <sys/time.h>
 
 #define MAX_THREADS 100
+#define ESRCH -1
 
 using namespace std;
 
@@ -97,8 +98,8 @@ void gtthread_init(long period)
 	// Setup the strucure to be used by the timer. Intialise it equal to the quantum
 	timer.it_interval.tv_sec = 0;
 	timer.it_interval.tv_usec = 0;
-	timer.it_value.tv_sec  = 2;
-	timer.it_value.tv_usec = 0;
+	timer.it_value.tv_sec  = period/1000;
+	timer.it_value.tv_usec = (period%1000)*1000;
 
 	quantum = period;
 	tcblk *thread = new tcblk();
@@ -161,16 +162,28 @@ int gtthread_create(gtthread_t *thread_t, void* (*start_routine)(void*), void *a
 int gtthread_join(gtthread_t thread, void **status)
 {
 	cout << "Entered join" << endl;
-	int search_id = (int)thread;
-	int returnValue;
+	long search_id = (long)thread;
+	//int returnValue;
+	
+	if(search_id > total_threads)
+		return ESRCH;
+
+	bool exists = 0;
+	 for (list<tcblk*>::iterator ci = ready_queue.begin(); ci != ready_queue.end(); ++ci)
+                        {
+                                if((*ci)->tid == search_id)
+				{
+					exists = 1;
+					break;
+				}
+                       }
+
 
 	while(1)
 	{
-		//		cout << "Waiting " << thread << endl;
 		int flag = 0;
 		if(!terminated_queue.empty())
 		{
-			//list<gtthread_t*>::const_iterator prev;
 			for (list<tcblk*>::iterator ci = terminated_queue.begin(); ci != terminated_queue.end(); ++ci)
 			{
 				if((*ci)->tid == search_id)
@@ -178,9 +191,12 @@ int gtthread_join(gtthread_t thread, void **status)
 					cout << "Found tid " << search_id << endl;
 					cout << "Current size = " << terminated_queue.size() << endl;
 					flag = 1;
+					exists = 1;
 					free((*ci)->ctxt.uc_stack.ss_sp);
-					returnValue = (*ci)->retval;
-
+					int *return_value = new int();;
+					//*return_value = (*ci)->retval;
+					*status = (*ci)->retval;
+					
 					// Check if blocking is really required here or not
 					sigprocmask(SIG_BLOCK, &set, NULL);
 					terminated_queue.erase(ci);
@@ -188,15 +204,17 @@ int gtthread_join(gtthread_t thread, void **status)
 
 					break;
 				}
-				//prev = ci;
 			}
+
+			if(!exists)
+				return ESRCH;
 		}
 		if(flag == 1)
 			break;
 		gtthread_yield();
 	}
 
-	return returnValue;
+	return 0;
 }
 
 void gtthread_exit(void* retval)
@@ -204,10 +222,10 @@ void gtthread_exit(void* retval)
 	sigprocmask(SIG_BLOCK, &set, NULL);
 	int *returnValue;
 
-	if(retval != NULL)
-		returnValue = (int*)retval;
-	else
-		returnValue = NULL;
+	//if(retval != NULL)
+	//	returnValue = (int*)retval;
+	//else
+	//	returnValue = NULL;
 
 	cout << "Exiting = " << ready_queue.size() << endl;
 	tcblk* tcb = ready_queue.front();
@@ -217,16 +235,14 @@ void gtthread_exit(void* retval)
 	cout << "Front = " << ready_queue.front()->tid;
 	cout << "Back = " << ready_queue.back()->tid;
 
-	if(returnValue != NULL)
-		tcb->retval = *returnValue;
-	else
-		tcb->retval = 0;
+//	if(returnValue != NULL)
+		tcb->retval = retval;
+//	else
+//		tcb->retval = 0;
 
 
 	// Check if blocking is really required here or not
-	//sigprocmask(SIG_BLOCK, &set, NULL);
 	terminated_queue.push_back(tcb);
-	//sigprocmask(SIG_UNBLOCK, &set, NULL);
 
 	cout << "***Exited***" << endl << endl;
 
@@ -264,9 +280,7 @@ int gtthread_cancel(gtthread_t tid)
 		if((*ci)->tid == tid)
 		{
 			cout << "Found cancellation tid " << tid << endl;
-			cout << "Current size = " << ready_queue.size() << endl;
 			tcblk *blk = *ci;
-			cout << "--------Block tid = " << blk->tid << endl;
 
 			sigprocmask(SIG_BLOCK, &set, NULL);
 			terminated_queue.push_back(blk);
@@ -319,18 +333,16 @@ int  gtthread_mutex_unlock(gtthread_mutex_t *mutex)
 void internal_exit()
 {
 	sigprocmask(SIG_BLOCK, &set, NULL);
-	cout << "Exiting = " << ready_queue.size() << endl;
 	tcblk* tcb = ready_queue.front();
+	tcb->retval = NULL;
 	ready_queue.pop_front();
 	cout << "Evicted " << tcb->tid << endl;
 
 	cout << "Front = " << ready_queue.front()->tid;
-	cout << "Back = " << ready_queue.back()->tid;
 
 
 	terminated_queue.push_back(tcb);
 
-	cout << "***Exited***" << endl << endl;
 
 	setitimer(ITIMER_REAL, &timer, NULL);
 	if(ready_queue.front()->isMain)
